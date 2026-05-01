@@ -49,7 +49,7 @@ if [ "$(id -u)" -eq 0 ] && [ "$ALLOW_ROOT" -ne 1 ]; then
 このスクリプトは通常ユーザーで実行してください。
 
 理由:
-  Nix / node / codex / gemini / claude はユーザーの $HOME 配下に入るため、
+  Nix はユーザーの $HOME 配下に環境を構築するため、
   root で実行すると /root 用の環境になってしまいます。
 
 通常の実行:
@@ -71,80 +71,6 @@ else
   SUDO=(sudo)
 fi
 
-detect_package_manager() {
-  if command -v apt-get >/dev/null 2>&1; then
-    echo "apt"
-  elif command -v dnf >/dev/null 2>&1; then
-    echo "dnf"
-  elif command -v pacman >/dev/null 2>&1; then
-    echo "pacman"
-  elif command -v apk >/dev/null 2>&1; then
-    echo "apk"
-  elif command -v zypper >/dev/null 2>&1; then
-    echo "zypper"
-  else
-    echo "unsupported"
-  fi
-}
-
-read_package_file() {
-  local file="$1"
-
-  grep -vE '^\s*(#|$)' "$file" \
-    | sed -E 's/#.*$//' \
-    | awk 'NF'
-}
-
-install_packages() {
-  local pm="$1"
-  local package_file="$2"
-
-  if [ ! -f "$package_file" ]; then
-    echo "Package file not found: $package_file" >&2
-    exit 1
-  fi
-
-  mapfile -t packages < <(read_package_file "$package_file")
-
-  if [ "${#packages[@]}" -eq 0 ]; then
-    log "No packages to install: $package_file"
-    return
-  fi
-
-  log "Package manager: $pm"
-  log "Package file: $package_file"
-
-  case "$pm" in
-    apt)
-      "${SUDO[@]}" apt-get update
-      DEBIAN_FRONTEND=noninteractive "${SUDO[@]}" apt-get install -y "${packages[@]}"
-      ;;
-
-    dnf)
-      "${SUDO[@]}" dnf install -y "${packages[@]}"
-      ;;
-
-    pacman)
-      "${SUDO[@]}" pacman -Syu --needed --noconfirm "${packages[@]}"
-      ;;
-
-    apk)
-      "${SUDO[@]}" apk update
-      "${SUDO[@]}" apk add --no-cache "${packages[@]}"
-      ;;
-
-    zypper)
-      "${SUDO[@]}" zypper --non-interactive refresh
-      "${SUDO[@]}" zypper --non-interactive install "${packages[@]}"
-      ;;
-
-    *)
-      echo "Unsupported package manager: $pm" >&2
-      exit 1
-      ;;
-  esac
-}
-
 ensure_bashrc_line() {
   local line="$1"
   local bashrc="$HOME/.bashrc"
@@ -153,6 +79,31 @@ ensure_bashrc_line() {
 
   if ! grep -qxF "$line" "$bashrc"; then
     echo "$line" >> "$bashrc"
+  fi
+}
+
+# Nix インストーラーの実行に curl が必要なため、なければシステム PM で最小限だけ入れる
+ensure_curl() {
+  if command -v curl >/dev/null 2>&1; then
+    return
+  fi
+
+  log "curl をインストール (Nix インストーラーのブートストラップ)"
+
+  if command -v apt-get >/dev/null 2>&1; then
+    "${SUDO[@]}" apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive "${SUDO[@]}" apt-get install -y curl ca-certificates
+  elif command -v dnf >/dev/null 2>&1; then
+    "${SUDO[@]}" dnf install -y curl ca-certificates
+  elif command -v pacman >/dev/null 2>&1; then
+    "${SUDO[@]}" pacman -Sy --needed --noconfirm curl ca-certificates
+  elif command -v apk >/dev/null 2>&1; then
+    "${SUDO[@]}" apk add --no-cache curl ca-certificates
+  elif command -v zypper >/dev/null 2>&1; then
+    "${SUDO[@]}" zypper --non-interactive install curl ca-certificates
+  else
+    echo "curl が見つかりません。curl をインストールしてから再実行してください。" >&2
+    exit 1
   fi
 }
 
@@ -183,37 +134,21 @@ install_nix_tools() {
     exit 1
   fi
 
-  log "Nix tools をインストール"
-  log "Tools file: $tools_file"
+  log "Nix channel を更新"
 
   if ! nix-channel --list | grep -q nixpkgs; then
     nix-channel --add https://nixos.org/channels/nixpkgs-unstable nixpkgs
   fi
   nix-channel --update
 
-  while read -r package _commands; do
-    [ -z "${package:-}" ] && continue
-    [[ "$package" == npm:* ]] && continue
+  log "Nix packages をインストール"
+  log "Tools file: $tools_file"
 
-    log "nix-env -iA ${package}"
-    nix-env -iA "$package"
-  done < <(
-    grep -vE '^\s*(#|$)' "$tools_file" \
-      | sed -E 's/#.*$//' \
-      | awk 'NF'
-  )
+  while read -r attr _commands; do
+    [ -z "${attr:-}" ] && continue
 
-  hash -r
-
-  log "npm global packages をインストール"
-
-  while read -r package _commands; do
-    [ -z "${package:-}" ] && continue
-    [[ "$package" != npm:* ]] && continue
-
-    local npm_pkg="${package#npm:}"
-    log "npm install -g ${npm_pkg}"
-    npm install -g "$npm_pkg"
+    log "nix-env -iA ${attr}"
+    nix-env -iA "$attr"
   done < <(
     grep -vE '^\s*(#|$)' "$tools_file" \
       | sed -E 's/#.*$//' \
@@ -249,12 +184,9 @@ verify_installation() {
 
   local failed=0
 
-  while read -r tool commands; do
-    [ -z "${tool:-}" ] && continue
-
-    if [ -z "${commands:-}" ]; then
-      continue
-    fi
+  while read -r _attr commands; do
+    [ -z "${_attr:-}" ] && continue
+    [ -z "${commands:-}" ] && continue
 
     for cmd in $commands; do
       if command -v "$cmd" >/dev/null 2>&1; then
@@ -276,29 +208,9 @@ verify_installation() {
       | awk 'NF'
   )
 
-  echo
-
-  if command -v gh >/dev/null 2>&1; then
-    echo "gh:     $(gh --version | head -n 1)"
-  else
-    echo "gh:     not found"
-  fi
-
-  if command -v podman >/dev/null 2>&1; then
-    echo "podman: $(podman --version)"
-  else
-    echo "podman: not found"
-  fi
-
-  if command -v nvim >/dev/null 2>&1; then
-    echo "nvim:   $(nvim --version | head -n 1)"
-  else
-    echo "nvim:   not found"
-  fi
-
   if [ "$failed" -ne 0 ]; then
     echo
-    echo "一部の Nix tools が見つかりません。必要なら次を実行してください:"
+    echo "一部の Nix packages が見つかりません。次を試してください:"
     echo
     echo "  exec bash -l"
     echo "  nix-env --query"
@@ -308,18 +220,9 @@ verify_installation() {
 }
 
 main() {
-  local pm
-  pm="$(detect_package_manager)"
-
-  if [ "$pm" = "unsupported" ]; then
-    echo "対応している package manager が見つかりません: apt, dnf, pacman, apk, zypper" >&2
-    exit 1
-  fi
-
-  local package_file="${SCRIPT_DIR}/packages/${pm}.txt"
   local nix_tools_file="${SCRIPT_DIR}/tools/nix.txt"
 
-  install_packages "$pm" "$package_file"
+  ensure_curl
   install_nix
   install_nix_tools "$nix_tools_file"
   verify_installation "$nix_tools_file"

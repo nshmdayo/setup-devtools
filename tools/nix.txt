@@ -1,10 +1,21 @@
 # format:
-# <nix-package-attr> <commands-to-verify...>
-# packages prefixed with "npm:" are installed via npm install -g
+# <nixpkgs-attr> <commands-to-verify...>
+# nixpkgs-attr は `nix-env -iA <attr>` に渡される
 
-nixpkgs.nodejs_24 node npm npx
-nixpkgs.go go
+# System tools
+nixpkgs.git      git
+nixpkgs.curl     curl
+nixpkgs.wget     wget
+nixpkgs.gnupg    gpg
+nixpkgs.podman   podman
+nixpkgs.neovim   nvim
+nixpkgs.gh       gh
 
-npm:@openai/codex codex
-npm:@google/gemini-cli gemini
-npm:@anthropic-ai/claude-code claude
+# Runtimes
+nixpkgs.nodejs_24  node npm npx
+nixpkgs.go         go
+
+# AI CLI tools
+nixpkgs.claude-code   claude
+nixpkgs.openai-codex  codex
+nixpkgs.gemini-cli    gemini
