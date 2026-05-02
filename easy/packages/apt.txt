@@ -5,6 +5,7 @@ wget
 gpg
 sudo
 tree
+tmux
 
 # Development
 git
