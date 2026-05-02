@@ -2,9 +2,8 @@
 
 Personal development tools managed by Nix and Home Manager.
 
-## Bootstrap
 
-### Ubuntu / Debian / Lightsail
+### Ubuntu / Debian Container
 
 If you need a dev user:
 
