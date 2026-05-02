@@ -1,0 +1,6 @@
+# format:
+# <mise-tool-spec> <commands-to-verify...>
+
+node@latest node npm npx
+go@latest go
+
